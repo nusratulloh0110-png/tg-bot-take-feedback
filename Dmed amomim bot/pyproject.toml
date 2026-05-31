@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dmed-anonymous-feedback-bot"
+version = "0.1.0"
+description = "Telegram bot for anonymous DMED implementation feedback"
+requires-python = ">=3.11"
+dependencies = [
+  "aiogram>=3.13,<4",
+  "SQLAlchemy>=2.0,<3",
+  "asyncpg>=0.29,<1",
+  "alembic>=1.13,<2",
+  "pydantic-settings>=2.4,<3",
+  "python-dotenv>=1.0,<2",
+  "redis>=5.0,<6",
+  "APScheduler>=3.10,<4",
+  "openpyxl>=3.1,<4",
+  "reportlab>=4.2,<5",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
