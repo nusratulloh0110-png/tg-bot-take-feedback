@@ -3,20 +3,16 @@ from typing import Any
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db.models import Employee, FeedbackType, Institution, User
-from app.domain.criteria import (
-    EMPLOYEE_CRITERIA,
-    IMPLEMENTATION_CRITERIA,
-    IMPLEMENTATION_TAGS,
-    Criterion,
-)
+from app.domain.criteria import Criterion, criteria_for_type, tag_label
 from app.keyboards.user import (
     comment_keyboard,
     confirm_keyboard,
+    contact_keyboard,
     employee_keyboard,
     language_keyboard,
     main_menu_keyboard,
@@ -40,21 +36,11 @@ router = Router(name="user")
 
 
 def _criteria(feedback_type: str) -> list[Criterion]:
-    if feedback_type == FeedbackType.employee.value:
-        return EMPLOYEE_CRITERIA
-    return IMPLEMENTATION_CRITERIA
+    return criteria_for_type(feedback_type)
 
 
 def _criterion_label(criterion: Criterion, language: str | None) -> str:
     return criterion.uz if normalize_lang(language) == "uz" else criterion.ru
-
-
-def _tag_label(code: str, language: str | None) -> str:
-    lang = normalize_lang(language)
-    tag = next((item for item in IMPLEMENTATION_TAGS if item.code == code), None)
-    if tag is None:
-        return code
-    return tag.uz if lang == "uz" else tag.ru
 
 
 async def _bound_user(session: AsyncSession, message: Message | CallbackQuery) -> User | None:
@@ -197,7 +183,7 @@ async def start_employee_feedback(callback: CallbackQuery, session: AsyncSession
         ratings={},
         criterion_index=0,
     )
-    await callback.message.answer(t(user.language, "anonymity_banner"))
+    await callback.message.answer(t(user.language, "identity_banner"))
     await callback.message.answer(t(user.language, "choose_employee"), reply_markup=employee_keyboard(employees, user.language))
 
 
@@ -225,7 +211,7 @@ async def start_implementation_feedback(
         tags=[],
         criterion_index=0,
     )
-    await callback.message.answer(t(user.language, "anonymity_banner"))
+    await callback.message.answer(t(user.language, "identity_banner"))
     await _ask_current_rating(callback.message, user.language, await state.get_data())
 
 
@@ -281,7 +267,7 @@ async def handle_rating(callback: CallbackQuery, session: AsyncSession, state: F
         await callback.message.answer(t(user.language, "choose_tags"), reply_markup=tags_keyboard(set(), user.language))
         return
 
-    await _ask_comment_choice(callback.message, user.language, state)
+    await _ask_full_name(callback.message, user.language, state)
 
 
 @router.callback_query(FeedbackFlow.choosing_tags, F.data.startswith("tag:"))
@@ -293,7 +279,7 @@ async def choose_tags(callback: CallbackQuery, session: AsyncSession, state: FSM
 
     code = callback.data.split(":", 1)[1]
     if code == "done":
-        await _ask_comment_choice(callback.message, user.language, state)
+        await _ask_full_name(callback.message, user.language, state)
         return
 
     data = await state.get_data()
@@ -304,6 +290,43 @@ async def choose_tags(callback: CallbackQuery, session: AsyncSession, state: FSM
         tags.add(code)
     await state.update_data(tags=list(tags))
     await callback.message.edit_reply_markup(reply_markup=tags_keyboard(tags, user.language))
+
+
+async def _ask_full_name(target: Message, language: str | None, state: FSMContext) -> None:
+    await state.set_state(FeedbackFlow.contact_full_name)
+    await target.answer(t(language, "full_name_prompt"))
+
+
+@router.message(FeedbackFlow.contact_full_name)
+async def receive_full_name(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    user = await _bound_user(session, message)
+    if user is None:
+        return
+    full_name = (message.text or "").strip()
+    if len(full_name) < 2:
+        await message.answer(t(user.language, "full_name_invalid"))
+        return
+    await state.update_data(reviewer_full_name=full_name)
+    await state.set_state(FeedbackFlow.contact_phone)
+    await message.answer(t(user.language, "phone_prompt"), reply_markup=contact_keyboard(user.language))
+
+
+@router.message(FeedbackFlow.contact_phone)
+async def receive_phone(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    user = await _bound_user(session, message)
+    if user is None:
+        return
+    contact = message.contact
+    if contact is None:
+        await message.answer(t(user.language, "phone_invalid"), reply_markup=contact_keyboard(user.language))
+        return
+    if contact.user_id != message.from_user.id:
+        await message.answer(t(user.language, "phone_not_own"), reply_markup=contact_keyboard(user.language))
+        return
+
+    await state.update_data(reviewer_phone=contact.phone_number)
+    await message.answer("Номер подтвержден.", reply_markup=ReplyKeyboardRemove())
+    await _ask_comment_choice(message, user.language, state)
 
 
 async def _ask_comment_choice(target: Message, language: str | None, state: FSMContext) -> None:
@@ -346,6 +369,8 @@ async def _show_summary(
     data = await state.get_data()
     criteria = _criteria(data["feedback_type"])
     lines = [t(language, "summary_title")]
+    lines.append(f"ФИО: {data.get('reviewer_full_name') or '-'}")
+    lines.append(f"Телефон: {data.get('reviewer_phone') or '-'}")
     if data["feedback_type"] == FeedbackType.employee.value:
         employee_id = data.get("employee_id")
         if employee_id:
@@ -356,12 +381,13 @@ async def _show_summary(
     else:
         selected_tags = data.get("tags", [])
         if selected_tags:
-            lines.append("Метки: " + ", ".join(_tag_label(tag, language) for tag in selected_tags))
+            lines.append("Метки: " + ", ".join(tag_label(tag, normalize_lang(language)) for tag in selected_tags))
 
     ratings = data.get("ratings", {})
     for criterion in criteria:
         if criterion.code in ratings:
             lines.append(f"{_criterion_label(criterion, language)}: {ratings[criterion.code]}/5")
+    lines.append(f"Средняя оценка: {average_rating(ratings)}")
     if data.get("comment"):
         lines.append(f"Комментарий: {data['comment']}")
     await target.answer("\n".join(lines), reply_markup=confirm_keyboard(language))
@@ -393,6 +419,8 @@ async def confirm_feedback(
         institution_id=data["institution_id"],
         feedback_type=FeedbackType(data["feedback_type"]),
         employee_id=data.get("employee_id"),
+        reviewer_full_name=data.get("reviewer_full_name"),
+        reviewer_phone=data.get("reviewer_phone"),
         ratings=data.get("ratings", {}),
         tags=data.get("tags", []),
         comment=data.get("comment"),

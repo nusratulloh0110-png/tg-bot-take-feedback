@@ -37,15 +37,36 @@ IMPLEMENTATION_TAGS = [
     QuickTag("training_lack", "Не хватает обучения", "O'qitish yetarli emas"),
     QuickTag("complex_ui", "Сложный интерфейс", "Interfeys murakkab"),
     QuickTag("good_support", "Хорошая техподдержка", "Texnik yordam yaxshi"),
-    QuickTag("works_well", "Всё работает отлично", "Hammasi yaxshi ishlayapti"),
+    QuickTag("works_well", "Все работает отлично", "Hammasi yaxshi ishlayapti"),
     QuickTag("need_help", "Нужна дополнительная помощь", "Qo'shimcha yordam kerak"),
 ]
+
+
+def criteria_for_type(feedback_type: str) -> list[Criterion]:
+    if feedback_type == "employee":
+        return EMPLOYEE_CRITERIA
+    return IMPLEMENTATION_CRITERIA
 
 
 def criterion_by_code(criteria: list[Criterion], code: str) -> Criterion | None:
     return next((item for item in criteria if item.code == code), None)
 
 
-def label_for_rating(value: int) -> str:
-    return "⭐" * value
+def criterion_label(code: str, feedback_type: str | None = None, language: str = "ru") -> str:
+    pools = [criteria_for_type(feedback_type)] if feedback_type else [EMPLOYEE_CRITERIA, IMPLEMENTATION_CRITERIA]
+    for criteria in pools:
+        criterion = criterion_by_code(criteria, code)
+        if criterion:
+            return criterion.uz if language == "uz" else criterion.ru
+    return code
 
+
+def tag_label(code: str, language: str = "ru") -> str:
+    tag = next((item for item in IMPLEMENTATION_TAGS if item.code == code), None)
+    if tag is None:
+        return code
+    return tag.uz if language == "uz" else tag.ru
+
+
+def label_for_rating(value: int) -> str:
+    return "⭐"

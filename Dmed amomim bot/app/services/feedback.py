@@ -50,6 +50,8 @@ async def create_feedback(
     feedback_type: FeedbackType,
     ratings: dict[str, int],
     employee_id: int | None = None,
+    reviewer_full_name: str | None = None,
+    reviewer_phone: str | None = None,
     tags: list[str] | None = None,
     comment: str | None = None,
 ) -> Feedback:
@@ -58,6 +60,8 @@ async def create_feedback(
         institution_id=institution_id,
         feedback_type=feedback_type,
         employee_id=employee_id,
+        reviewer_full_name=reviewer_full_name.strip() if reviewer_full_name else None,
+        reviewer_phone=reviewer_phone.strip() if reviewer_phone else None,
         ratings=ratings,
         tags=tags or [],
         comment=comment.strip() if comment else None,
@@ -83,13 +87,20 @@ async def list_user_feedback(session: AsyncSession, user_id: int) -> list[Feedba
     return list(result)
 
 
-async def list_recent_feedback(session: AsyncSession, limit: int = 10) -> list[Feedback]:
-    result = await session.scalars(
+async def list_recent_feedback(
+    session: AsyncSession,
+    limit: int = 10,
+    institution_id: int | None = None,
+) -> list[Feedback]:
+    query = (
         select(Feedback)
         .options(selectinload(Feedback.employee), selectinload(Feedback.institution), selectinload(Feedback.user))
         .order_by(Feedback.created_at.desc())
         .limit(limit)
     )
+    if institution_id is not None:
+        query = query.where(Feedback.institution_id == institution_id)
+    result = await session.scalars(query)
     return list(result)
 
 

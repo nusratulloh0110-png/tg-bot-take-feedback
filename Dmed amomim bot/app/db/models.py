@@ -90,6 +90,8 @@ class Feedback(Base):
     feedback_type: Mapped[FeedbackType] = mapped_column(Enum(FeedbackType), nullable=False)
     employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"))
     institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id"), nullable=False)
+    reviewer_full_name: Mapped[str | None] = mapped_column(String(255))
+    reviewer_phone: Mapped[str | None] = mapped_column(String(32))
     ratings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text()), default=list, server_default="{}")
     comment: Mapped[str | None] = mapped_column(Text)

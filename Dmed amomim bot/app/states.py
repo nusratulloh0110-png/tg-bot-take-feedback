@@ -5,13 +5,11 @@ class FeedbackFlow(StatesGroup):
     choosing_employee = State()
     rating = State()
     choosing_tags = State()
+    contact_full_name = State()
+    contact_phone = State()
     comment_choice = State()
     comment_text = State()
     confirm = State()
-
-
-class AdminAuth(StatesGroup):
-    password = State()
 
 
 class CreateInstitution(StatesGroup):
@@ -24,4 +22,3 @@ class CreateEmployee(StatesGroup):
     institution_id = State()
     full_name = State()
     position = State()
-

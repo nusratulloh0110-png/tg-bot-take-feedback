@@ -2,6 +2,7 @@ import asyncio
 import logging
 from zoneinfo import ZoneInfo
 
+import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -68,9 +69,27 @@ async def main() -> None:
         )
         scheduler.start()
 
+    web_server: uvicorn.Server | None = None
+    web_task: asyncio.Task | None = None
+    if settings.web_enabled:
+        from app.web import app as web_app
+
+        web_config = uvicorn.Config(
+            web_app,
+            host=settings.web_host,
+            port=settings.web_port,
+            log_level="info",
+        )
+        web_server = uvicorn.Server(web_config)
+        web_task = asyncio.create_task(web_server.serve())
+
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if web_server is not None:
+            web_server.should_exit = True
+        if web_task is not None:
+            await web_task
         if scheduler.running:
             scheduler.shutdown(wait=False)
         await bot.session.close()

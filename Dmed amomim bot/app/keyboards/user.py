@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.db.models import Employee
@@ -46,10 +46,21 @@ def rating_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=f"{label_for_rating(value)} {value}", callback_data=f"rating:{value}")
+                InlineKeyboardButton(text=f"{value} {label_for_rating(value)}", callback_data=f"rating:{value}")
                 for value in range(1, 6)
             ]
         ]
+    )
+
+
+def contact_keyboard(language: str | None) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(language, "phone_button"), request_contact=True)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder=t(language, "phone_button"),
     )
 
 
@@ -80,9 +91,8 @@ def tags_keyboard(selected: set[str], language: str | None) -> InlineKeyboardMar
     builder = InlineKeyboardBuilder()
     for tag in IMPLEMENTATION_TAGS:
         label = tag.ru if lang == "ru" else tag.uz
-        prefix = "✅ " if tag.code in selected else ""
+        prefix = "✓ " if tag.code in selected else ""
         builder.button(text=f"{prefix}{label}", callback_data=f"tag:{tag.code}")
     builder.button(text=t(lang, "done"), callback_data="tag:done")
     builder.adjust(1)
     return builder.as_markup()
-

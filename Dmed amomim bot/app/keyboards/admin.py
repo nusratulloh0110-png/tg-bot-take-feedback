@@ -26,8 +26,8 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
 def institutions_keyboard(items: list[Institution]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for institution in items:
-        status = "🟢" if institution.token_active and not institution.archived else "⚪"
-        builder.button(text=f"{status} #{institution.id} {institution.name}", callback_data=f"inst:{institution.id}")
+        status = "Активно" if institution.token_active and not institution.archived else "Закрыто"
+        builder.button(text=f"{status} | #{institution.id} {institution.name}", callback_data=f"inst:{institution.id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -35,8 +35,8 @@ def institutions_keyboard(items: list[Institution]) -> InlineKeyboardMarkup:
 def employees_keyboard(items: list[Employee]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for employee in items:
-        status = "⚪" if employee.archived else "🟢"
-        builder.button(text=f"{status} #{employee.id} {employee.full_name}", callback_data=f"employee_admin:{employee.id}")
+        status = "Архив" if employee.archived else "Активен"
+        builder.button(text=f"{status} | #{employee.id} {employee.full_name}", callback_data=f"employee_admin:{employee.id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -45,7 +45,7 @@ def employee_actions_keyboard(employee_id: int, archived: bool) -> InlineKeyboar
     label = "Вернуть из архива" if archived else "Архивировать"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"employee_archive:{employee_id}")]
+            [InlineKeyboardButton(text=label, callback_data=f"employee_archive:{employee_id}")],
         ]
     )
 
@@ -54,6 +54,11 @@ def institution_actions_keyboard(institution_id: int, link: str) -> InlineKeyboa
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Открыть ссылку", url=link)],
+            [
+                InlineKeyboardButton(text="Отзывы", callback_data=f"inst_reviews:{institution_id}"),
+                InlineKeyboardButton(text="PDF", callback_data=f"inst_export_pdf:{institution_id}"),
+                InlineKeyboardButton(text="Excel", callback_data=f"inst_export_xlsx:{institution_id}"),
+            ],
             [
                 InlineKeyboardButton(text="Деактивировать", callback_data=f"inst_deactivate:{institution_id}"),
                 InlineKeyboardButton(text="Перевыпустить", callback_data=f"inst_reissue:{institution_id}"),

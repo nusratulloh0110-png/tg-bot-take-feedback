@@ -10,11 +10,14 @@ class Settings(BaseSettings):
     bot_username: str | None = Field(default=None, alias="BOT_USERNAME")
     database_url: str = Field(..., alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
-    admin_password: str = Field(..., alias="ADMIN_PASSWORD")
     admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
     timezone: str = Field(default="Asia/Tashkent", alias="TIMEZONE")
     weekly_digest_enabled: bool = Field(default=True, alias="WEEKLY_DIGEST_ENABLED")
     auto_create_tables: bool = Field(default=False, alias="AUTO_CREATE_TABLES")
+    web_enabled: bool = Field(default=True, alias="WEB_ENABLED")
+    web_host: str = Field(default="0.0.0.0", alias="WEB_HOST")
+    web_port: int = Field(default=8000, alias="WEB_PORT")
+    web_admin_token: str | None = Field(default=None, alias="WEB_ADMIN_TOKEN")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -38,4 +41,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

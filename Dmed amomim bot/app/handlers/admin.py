@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.db.models import Employee, FeedbackStatus, Institution
+from app.domain.criteria import criterion_label, tag_label
 from app.keyboards.admin import (
     admin_menu_keyboard,
     employee_actions_keyboard,
@@ -24,15 +25,32 @@ from app.services.export import export_feedback_pdf, export_feedback_xlsx
 from app.services.feedback import average_rating, list_recent_feedback, update_feedback_status
 from app.services.institutions import create_institution, reissue_token
 from app.services.tokens import build_deep_link
-from app.states import AdminAuth, CreateEmployee, CreateInstitution
+from app.states import CreateEmployee, CreateInstitution
 
 router = Router(name="admin")
+
+
+STATUS_LABELS = {
+    FeedbackStatus.new: "Новый",
+    FeedbackStatus.reviewed: "Изучено",
+    FeedbackStatus.in_progress: "В работе",
+    FeedbackStatus.closed: "Закрыто",
+}
+
+
+TYPE_LABELS = {
+    "employee": "Оценка сотрудника",
+    "implementation": "Оценка внедрения",
+}
 
 
 async def _is_admin_message(message: Message, session: AsyncSession, settings: Settings) -> bool:
     allowed = await is_admin(session, message.from_user.id, settings)
     if not allowed:
-        await message.answer("Нет доступа. Используйте /admin и пароль администратора.")
+        await message.answer(
+            "Нет доступа. Администраторов больше нельзя добавить паролем. "
+            "Попросите действующего администратора добавить ваш Telegram ID через /add_admin."
+        )
     return allowed
 
 
@@ -54,65 +72,40 @@ async def _institution_link(bot: Bot, settings: Settings, institution: Instituti
     return build_deep_link(await _bot_username(bot, settings), institution.token)
 
 
+def _parse_optional_institution_id(args: str | None) -> int | None:
+    if not args:
+        return None
+    try:
+        return int(args.strip())
+    except ValueError:
+        return None
+
+
+def _message_text(message: Message) -> str | None:
+    text = (message.text or "").strip()
+    return text or None
+
+
+def _format_ratings(ratings: dict[str, int], feedback_type: str) -> str:
+    if not ratings:
+        return "-"
+    return "\n".join(
+        f"- {criterion_label(code, feedback_type)}: {value}/5"
+        for code, value in ratings.items()
+    )
+
+
 @router.message(Command("admin"))
 async def admin_login(
     message: Message,
-    command: CommandObject,
-    session: AsyncSession,
-    settings: Settings,
-    state: FSMContext,
-) -> None:
-    if await is_admin(session, message.from_user.id, settings):
-        await state.clear()
-        await message.answer("Админ-панель:", reply_markup=admin_menu_keyboard())
-        return
-
-    password = command.args.strip() if command.args else None
-    if password and password == settings.admin_password:
-        await add_admin(session, message.from_user.id)
-        await state.clear()
-        await message.answer("Доступ администратора сохранён.", reply_markup=admin_menu_keyboard())
-        return
-
-    await state.set_state(AdminAuth.password)
-    await message.answer("Введите пароль администратора:")
-
-
-@router.message(AdminAuth.password)
-async def admin_password(message: Message, session: AsyncSession, settings: Settings, state: FSMContext) -> None:
-    if message.text and message.text.strip() == settings.admin_password:
-        await add_admin(session, message.from_user.id)
-        await state.clear()
-        await message.answer("Доступ администратора сохранён.", reply_markup=admin_menu_keyboard())
-        return
-    await message.answer("Неверный пароль.")
-
-
-@router.message(Command("add_institution"))
-async def add_institution_command(
-    message: Message,
-    command: CommandObject,
-    bot: Bot,
     session: AsyncSession,
     settings: Settings,
     state: FSMContext,
 ) -> None:
     if not await _is_admin_message(message, session, settings):
         return
-
-    if command.args:
-        parts = [part.strip() for part in command.args.split("|")]
-        institution = await create_institution(
-            session,
-            parts[0],
-            parts[1] if len(parts) > 1 else None,
-            parts[2] if len(parts) > 2 else None,
-        )
-        await _send_institution_card(message, bot, settings, institution)
-        return
-
-    await state.set_state(CreateInstitution.name)
-    await message.answer("Название учреждения:")
+    await state.clear()
+    await message.answer("Админ-панель:", reply_markup=admin_menu_keyboard())
 
 
 @router.message(Command("add_admin"))
@@ -136,19 +129,57 @@ async def add_admin_command(
     await message.answer(f"Администратор добавлен: {user_id}")
 
 
+@router.message(Command("add_institution"))
+async def add_institution_command(
+    message: Message,
+    command: CommandObject,
+    bot: Bot,
+    session: AsyncSession,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await _is_admin_message(message, session, settings):
+        return
+
+    if command.args:
+        parts = [part.strip() for part in command.args.split("|")]
+        if not parts[0]:
+            await message.answer("Укажите название учреждения.")
+            return
+        institution = await create_institution(
+            session,
+            parts[0],
+            parts[1] if len(parts) > 1 else None,
+            parts[2] if len(parts) > 2 else None,
+        )
+        await _send_institution_card(message, bot, settings, institution)
+        return
+
+    await state.set_state(CreateInstitution.name)
+    await message.answer("Название учреждения:")
+
+
 @router.message(CreateInstitution.name)
 async def create_institution_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(name=message.text.strip())
+    name = _message_text(message)
+    if not name:
+        await message.answer("Введите название учреждения текстом.")
+        return
+    await state.update_data(name=name)
     await state.set_state(CreateInstitution.region)
-    await message.answer("Регион (или '-' чтобы пропустить):")
+    await message.answer("Регион или '-' чтобы пропустить:")
 
 
 @router.message(CreateInstitution.region)
 async def create_institution_region(message: Message, state: FSMContext) -> None:
-    region = None if message.text.strip() == "-" else message.text.strip()
+    text = _message_text(message)
+    if text is None:
+        await message.answer("Введите регион текстом или '-' чтобы пропустить.")
+        return
+    region = None if text == "-" else text
     await state.update_data(region=region)
     await state.set_state(CreateInstitution.address)
-    await message.answer("Адрес (или '-' чтобы пропустить):")
+    await message.answer("Адрес или '-' чтобы пропустить:")
 
 
 @router.message(CreateInstitution.address)
@@ -160,7 +191,11 @@ async def create_institution_address(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
-    address = None if message.text.strip() == "-" else message.text.strip()
+    text = _message_text(message)
+    if text is None:
+        await message.answer("Введите адрес текстом или '-' чтобы пропустить.")
+        return
+    address = None if text == "-" else text
     institution = await create_institution(session, data["name"], data.get("region"), address)
     await state.clear()
     await _send_institution_card(message, bot, settings, institution)
@@ -169,10 +204,13 @@ async def create_institution_address(
 async def _send_institution_card(message: Message, bot: Bot, settings: Settings, institution: Institution) -> None:
     link = await _institution_link(bot, settings, institution)
     text = (
-        f"Учреждение создано\n"
+        "Учреждение\n"
         f"ID: {institution.id}\n"
         f"Название: {institution.name}\n"
         f"Регион: {institution.region or '-'}\n"
+        f"Адрес: {institution.address or '-'}\n"
+        f"Ссылка активна: {'да' if institution.token_active else 'нет'}\n"
+        f"Архив: {'да' if institution.archived else 'нет'}\n"
         f"Ссылка: {link}"
     )
     await message.answer(text, reply_markup=institution_actions_keyboard(institution.id, link))
@@ -194,7 +232,15 @@ async def add_employee_command(
         if len(parts) < 2:
             await message.answer("Формат: /add_employee institution_id | ФИО | должность")
             return
-        institution = await session.get(Institution, int(parts[0]))
+        try:
+            institution_id = int(parts[0])
+        except ValueError:
+            await message.answer("ID учреждения должен быть числом.")
+            return
+        if not parts[1]:
+            await message.answer("Укажите ФИО сотрудника.")
+            return
+        institution = await session.get(Institution, institution_id)
         if institution is None:
             await message.answer("Учреждение не найдено.")
             return
@@ -210,8 +256,12 @@ async def add_employee_command(
 
 @router.message(CreateEmployee.institution_id)
 async def create_employee_institution(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    text = _message_text(message)
+    if text is None:
+        await message.answer("Введите числовой ID учреждения.")
+        return
     try:
-        institution_id = int(message.text.strip())
+        institution_id = int(text)
     except ValueError:
         await message.answer("Введите числовой ID учреждения.")
         return
@@ -226,15 +276,23 @@ async def create_employee_institution(message: Message, session: AsyncSession, s
 
 @router.message(CreateEmployee.full_name)
 async def create_employee_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(full_name=message.text.strip())
+    full_name = _message_text(message)
+    if not full_name:
+        await message.answer("Введите ФИО сотрудника текстом.")
+        return
+    await state.update_data(full_name=full_name)
     await state.set_state(CreateEmployee.position)
-    await message.answer("Должность (или '-' чтобы пропустить):")
+    await message.answer("Должность или '-' чтобы пропустить:")
 
 
 @router.message(CreateEmployee.position)
 async def create_employee_position(message: Message, session: AsyncSession, state: FSMContext) -> None:
     data = await state.get_data()
-    position = None if message.text.strip() == "-" else message.text.strip()
+    text = _message_text(message)
+    if text is None:
+        await message.answer("Введите должность текстом или '-' чтобы пропустить.")
+        return
+    position = None if text == "-" else text
     employee = Employee(institution_id=data["institution_id"], full_name=data["full_name"], position=position)
     session.add(employee)
     await session.flush()
@@ -326,7 +384,7 @@ async def employee_archive(callback: CallbackQuery, session: AsyncSession, setti
         await callback.message.answer("Сотрудник не найден.")
         return
     employee.archived = not employee.archived
-    await callback.message.answer("Статус сотрудника обновлён.")
+    await callback.message.answer("Статус сотрудника обновлен.")
 
 
 @router.callback_query(F.data.startswith("inst:"))
@@ -339,16 +397,7 @@ async def institution_card(callback: CallbackQuery, bot: Bot, session: AsyncSess
     if institution is None:
         await callback.message.answer("Учреждение не найдено.")
         return
-    link = await _institution_link(bot, settings, institution)
-    text = (
-        f"#{institution.id} {institution.name}\n"
-        f"Регион: {institution.region or '-'}\n"
-        f"Адрес: {institution.address or '-'}\n"
-        f"Токен активен: {'да' if institution.token_active else 'нет'}\n"
-        f"Архив: {'да' if institution.archived else 'нет'}\n"
-        f"Ссылка: {link}"
-    )
-    await callback.message.answer(text, reply_markup=institution_actions_keyboard(institution.id, link))
+    await _send_institution_card(callback.message, bot, settings, institution)
 
 
 @router.callback_query(F.data.startswith("inst_deactivate:"))
@@ -394,10 +443,10 @@ async def archive_institution(callback: CallbackQuery, session: AsyncSession, se
 
 
 @router.message(Command("reviews"))
-async def reviews_command(message: Message, session: AsyncSession, settings: Settings) -> None:
+async def reviews_command(message: Message, command: CommandObject, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin_message(message, session, settings):
         return
-    await _send_recent_reviews(message, session)
+    await _send_recent_reviews(message, session, _parse_optional_institution_id(command.args))
 
 
 @router.callback_query(F.data == "admin:reviews")
@@ -408,24 +457,35 @@ async def reviews_callback(callback: CallbackQuery, session: AsyncSession, setti
     await _send_recent_reviews(callback.message, session)
 
 
-async def _send_recent_reviews(target: Message, session: AsyncSession) -> None:
-    reviews = await list_recent_feedback(session, limit=10)
+@router.callback_query(F.data.startswith("inst_reviews:"))
+async def institution_reviews_callback(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    await callback.answer()
+    if not await _is_admin_callback(callback, session, settings):
+        return
+    await _send_recent_reviews(callback.message, session, int(callback.data.split(":", 1)[1]))
+
+
+async def _send_recent_reviews(target: Message, session: AsyncSession, institution_id: int | None = None) -> None:
+    reviews = await list_recent_feedback(session, limit=10, institution_id=institution_id)
     if not reviews:
         await target.answer("Отзывов пока нет.")
         return
     for item in reviews:
+        tags = ", ".join(tag_label(code) for code in item.tags or []) or "-"
         text = (
             f"Отзыв {item.id}\n"
-            f"Тип: {item.feedback_type.value}\n"
+            f"Тип: {TYPE_LABELS.get(item.feedback_type.value, item.feedback_type.value)}\n"
             f"Учреждение: {item.institution.name}\n"
-            f"Сотрудник: {item.employee.full_name if item.employee else 'Не указан'}\n"
+            f"Сотрудник: {item.employee.full_name if item.employee else 'не указан'}\n"
             f"Дата: {item.created_at:%Y-%m-%d %H:%M}\n"
+            f"ФИО отправителя: {item.reviewer_full_name or '-'}\n"
+            f"Телефон: {item.reviewer_phone or '-'}\n"
             f"Средняя оценка: {average_rating(item.ratings)}\n"
-            f"Оценки: {item.ratings}\n"
-            f"Метки: {', '.join(item.tags or []) or '-'}\n"
+            f"Оценки:\n{_format_ratings(item.ratings, item.feedback_type.value)}\n"
+            f"Метки: {tags}\n"
             f"Комментарий: {item.comment or '-'}\n"
-            f"Отправитель: {item.user.telegram_link or '-'}\n"
-            f"Статус: {item.status.value}"
+            f"Telegram: {item.user.telegram_link or '-'}\n"
+            f"Статус: {STATUS_LABELS.get(item.status, item.status.value)}"
         )
         await target.answer(text, reply_markup=review_status_keyboard(str(item.id)))
 
@@ -437,14 +497,14 @@ async def review_status(callback: CallbackQuery, session: AsyncSession, settings
         return
     _, feedback_id, status = callback.data.split(":", 2)
     await update_feedback_status(session, UUID(feedback_id), FeedbackStatus(status))
-    await callback.message.answer(f"Статус обновлён: {status}")
+    await callback.message.answer(f"Статус обновлен: {STATUS_LABELS.get(FeedbackStatus(status), status)}")
 
 
 @router.message(Command("stats"))
-async def stats_command(message: Message, session: AsyncSession, settings: Settings) -> None:
+async def stats_command(message: Message, command: CommandObject, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin_message(message, session, settings):
         return
-    await message.answer(await dashboard_summary(session))
+    await message.answer(await dashboard_summary(session, institution_id=_parse_optional_institution_id(command.args)))
 
 
 @router.callback_query(F.data == "admin:stats")
@@ -464,8 +524,16 @@ async def export_command(
 ) -> None:
     if not await _is_admin_message(message, session, settings):
         return
-    fmt = (command.args or "xlsx").strip().lower()
-    await _send_export(message, session, fmt)
+    fmt = "xlsx"
+    institution_id = None
+    if command.args:
+        parts = command.args.split()
+        if parts[0].lower() in {"xlsx", "excel", "pdf"}:
+            fmt = "xlsx" if parts[0].lower() == "excel" else parts[0].lower()
+            institution_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+        elif parts[0].isdigit():
+            institution_id = int(parts[0])
+    await _send_export(message, session, fmt, institution_id)
 
 
 @router.callback_query(F.data == "admin:export_xlsx")
@@ -484,13 +552,35 @@ async def export_pdf_callback(callback: CallbackQuery, session: AsyncSession, se
     await _send_export(callback.message, session, "pdf")
 
 
-async def _send_export(target: Message, session: AsyncSession, fmt: str) -> None:
+@router.callback_query(F.data.startswith("inst_export_xlsx:"))
+async def institution_export_xlsx_callback(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    await callback.answer()
+    if not await _is_admin_callback(callback, session, settings):
+        return
+    await _send_export(callback.message, session, "xlsx", int(callback.data.split(":", 1)[1]))
+
+
+@router.callback_query(F.data.startswith("inst_export_pdf:"))
+async def institution_export_pdf_callback(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    await callback.answer()
+    if not await _is_admin_callback(callback, session, settings):
+        return
+    await _send_export(callback.message, session, "pdf", int(callback.data.split(":", 1)[1]))
+
+
+async def _send_export(
+    target: Message,
+    session: AsyncSession,
+    fmt: str,
+    institution_id: int | None = None,
+) -> None:
+    suffix = f"_institution_{institution_id}" if institution_id else ""
     if fmt == "pdf":
-        path = await export_feedback_pdf(session)
-        filename = "dmed_feedback.pdf"
+        path = await export_feedback_pdf(session, institution_id=institution_id)
+        filename = f"dmed_feedback{suffix}.pdf"
     else:
-        path = await export_feedback_xlsx(session)
-        filename = "dmed_feedback.xlsx"
+        path = await export_feedback_xlsx(session, institution_id=institution_id)
+        filename = f"dmed_feedback{suffix}.xlsx"
     try:
         await target.answer_document(FSInputFile(path, filename=filename))
     finally:

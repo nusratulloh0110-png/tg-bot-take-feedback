@@ -1,2 +1,1 @@
-"""DMED anonymous feedback bot package."""
-
+"""DMED feedback bot and admin panel package."""
