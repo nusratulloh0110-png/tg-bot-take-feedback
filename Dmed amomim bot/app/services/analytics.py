@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Employee, Feedback, FeedbackType, Institution, LinkVisit
+from app.db.models import Employee, EmployeeInstitution, Feedback, FeedbackType, Institution, LinkVisit
 from app.services.feedback import average_rating
 
 
@@ -21,11 +21,17 @@ async def feedback_report_data(
     session: AsyncSession,
     days: int | None = 30,
     institution_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> dict[str, Any]:
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days and date_from is None else None
+    start_at = datetime.combine(date_from, time.min, tzinfo=timezone.utc) if date_from else since
+    end_at = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc) if date_to else None
     conditions = []
-    if since is not None:
-        conditions.append(Feedback.created_at >= since)
+    if start_at is not None:
+        conditions.append(Feedback.created_at >= start_at)
+    if end_at is not None:
+        conditions.append(Feedback.created_at < end_at)
     if institution_id is not None:
         conditions.append(Feedback.institution_id == institution_id)
 
@@ -108,11 +114,19 @@ async def feedback_report_data(
     visit_query = select(func.count(LinkVisit.id))
     if institution_id is not None:
         visit_query = visit_query.where(LinkVisit.institution_id == institution_id)
+    if start_at is not None:
+        visit_query = visit_query.where(LinkVisit.created_at >= start_at)
+    if end_at is not None:
+        visit_query = visit_query.where(LinkVisit.created_at < end_at)
     visits_total = await session.scalar(visit_query) or 0
 
     employees_query = select(func.count(Employee.id)).where(Employee.archived.is_(False))
     if institution_id is not None:
-        employees_query = employees_query.where(Employee.institution_id == institution_id)
+        employees_query = (
+            select(func.count(func.distinct(Employee.id)))
+            .join(EmployeeInstitution, EmployeeInstitution.employee_id == Employee.id)
+            .where(Employee.archived.is_(False), EmployeeInstitution.institution_id == institution_id)
+        )
     active_employees_total = await session.scalar(employees_query) or 0
 
     institutions_total = await session.scalar(select(func.count(Institution.id)).where(Institution.archived.is_(False))) or 0
@@ -123,6 +137,8 @@ async def feedback_report_data(
 
     return {
         "days": days,
+        "date_from": date_from,
+        "date_to": date_to,
         "institution": selected_institution,
         "feedback_items": feedback_items,
         "summary": {

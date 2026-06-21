@@ -1,6 +1,7 @@
 from html import escape
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -102,8 +103,23 @@ def _style_sheet(sheet) -> None:
         sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), 60)
 
 
-async def export_feedback_xlsx(session: AsyncSession, institution_id: int | None = None) -> Path:
-    data = await feedback_report_data(session, days=None, institution_id=institution_id)
+def _period_text(date_from: date | None = None, date_to: date | None = None) -> str:
+    if date_from and date_to:
+        return f"{date_from:%Y-%m-%d} - {date_to:%Y-%m-%d}"
+    if date_from:
+        return f"с {date_from:%Y-%m-%d}"
+    if date_to:
+        return f"до {date_to:%Y-%m-%d}"
+    return "Все время"
+
+
+async def export_feedback_xlsx(
+    session: AsyncSession,
+    institution_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> Path:
+    data = await feedback_report_data(session, days=None, institution_id=institution_id, date_from=date_from, date_to=date_to)
     feedback_items = data["feedback_items"]
     summary = data["summary"]
 
@@ -112,6 +128,7 @@ async def export_feedback_xlsx(session: AsyncSession, institution_id: int | None
     summary_sheet.title = "Сводка"
     summary_sheet.append(["Показатель", "Значение"])
     summary_rows = [
+        ("Период", _period_text(date_from, date_to)),
         ("Всего отзывов", summary["feedback_total"]),
         ("Сотрудников, от которых получен фидбек", summary["unique_reviewers_total"]),
         ("Средняя оценка", summary["average_rating"]),
@@ -181,8 +198,13 @@ def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
     return Paragraph(escape(str(text or "-")).replace("\n", "<br/>"), style)
 
 
-async def export_feedback_pdf(session: AsyncSession, institution_id: int | None = None) -> Path:
-    data = await feedback_report_data(session, days=None, institution_id=institution_id)
+async def export_feedback_pdf(
+    session: AsyncSession,
+    institution_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> Path:
+    data = await feedback_report_data(session, days=None, institution_id=institution_id, date_from=date_from, date_to=date_to)
     summary = data["summary"]
     feedback_items = data["feedback_items"]
 
@@ -228,6 +250,7 @@ async def export_feedback_pdf(session: AsyncSession, institution_id: int | None 
         title += f": {institution.name}"
 
     story = [Paragraph(title, styles["Title"]), Spacer(1, 8)]
+    story.extend([Paragraph(f"Период: {_period_text(date_from, date_to)}", styles["Normal"]), Spacer(1, 8)])
     summary_table = Table(
         [
             [_paragraph("Показатель", table_header), _paragraph("Значение", table_header)],

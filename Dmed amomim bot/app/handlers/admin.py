@@ -21,6 +21,7 @@ from app.keyboards.admin import (
 )
 from app.services.admins import add_admin, is_admin
 from app.services.analytics import dashboard_summary
+from app.services.employees import set_employee_institutions
 from app.services.export import export_feedback_pdf, export_feedback_xlsx
 from app.services.feedback import average_rating, list_recent_feedback, update_feedback_status
 from app.services.institutions import create_institution, reissue_token
@@ -247,6 +248,7 @@ async def add_employee_command(
         employee = Employee(institution_id=institution.id, full_name=parts[1], position=parts[2] if len(parts) > 2 else None)
         session.add(employee)
         await session.flush()
+        await set_employee_institutions(session, employee, [institution.id])
         await message.answer(f"Сотрудник добавлен: #{employee.id} {employee.full_name}")
         return
 
@@ -296,6 +298,7 @@ async def create_employee_position(message: Message, session: AsyncSession, stat
     employee = Employee(institution_id=data["institution_id"], full_name=data["full_name"], position=position)
     session.add(employee)
     await session.flush()
+    await set_employee_institutions(session, employee, [data["institution_id"]])
     await state.clear()
     await message.answer(f"Сотрудник добавлен: #{employee.id} {employee.full_name}")
 

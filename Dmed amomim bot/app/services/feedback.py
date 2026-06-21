@@ -5,7 +5,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Employee, Feedback, FeedbackStatus, FeedbackType
+from app.db.models import Employee, EmployeeInstitution, Feedback, FeedbackStatus, FeedbackType
 
 
 SPAM_WINDOW = timedelta(days=7)
@@ -14,10 +14,11 @@ SPAM_WINDOW = timedelta(days=7)
 async def list_employees_for_institution(session: AsyncSession, institution_id: int) -> list[Employee]:
     result = await session.scalars(
         select(Employee)
-        .where(Employee.institution_id == institution_id, Employee.archived.is_(False))
+        .join(EmployeeInstitution, EmployeeInstitution.employee_id == Employee.id)
+        .where(EmployeeInstitution.institution_id == institution_id, Employee.archived.is_(False))
         .order_by(Employee.full_name)
     )
-    return list(result)
+    return list(result.unique())
 
 
 async def is_rate_limited(

@@ -38,6 +38,7 @@ class Institution(Base):
 
     users: Mapped[list["User"]] = relationship(back_populates="institution")
     employees: Mapped[list["Employee"]] = relationship(back_populates="institution")
+    employee_links: Mapped[list["EmployeeInstitution"]] = relationship(back_populates="institution")
     feedback: Mapped[list["Feedback"]] = relationship(back_populates="institution")
 
 
@@ -79,7 +80,19 @@ class Employee(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     institution: Mapped[Institution] = relationship(back_populates="employees")
+    institution_links: Mapped[list["EmployeeInstitution"]] = relationship(back_populates="employee")
     feedback: Mapped[list["Feedback"]] = relationship(back_populates="employee")
+
+
+class EmployeeInstitution(Base):
+    __tablename__ = "employee_institutions"
+
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), primary_key=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    employee: Mapped[Employee] = relationship(back_populates="institution_links")
+    institution: Mapped[Institution] = relationship(back_populates="employee_links")
 
 
 class Feedback(Base):
