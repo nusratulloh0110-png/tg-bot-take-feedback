@@ -25,7 +25,7 @@ from app.services.feedback import average_rating, update_feedback_status
 from app.services.institutions import create_institution, reissue_token
 from app.services.tokens import build_deep_link
 
-app = FastAPI(title="DMED Admin Panel")
+app = FastAPI(title="Feedback Admin")
 
 
 STATUS_LABELS = {
@@ -112,6 +112,29 @@ def _form_text(value: object, field_name: str, required: bool = False) -> str | 
 
 def _date_value(value: date | None) -> str:
     return value.isoformat() if value else ""
+
+
+def _optional_int(value: object, field_name: str) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Некорректное значение поля {field_name}") from exc
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail=f"Некорректное значение поля {field_name}")
+    return parsed
+
+
+def _optional_date(value: object, field_name: str) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Некорректная дата в поле {field_name}") from exc
 
 
 def _period_query(institution_id: int | None, date_from: date | None, date_to: date | None) -> str:
@@ -248,7 +271,7 @@ def _page(title: str, body: str, active_tab: str | None = None) -> HTMLResponse:
       <style>{css}</style>
     </head>
     <body>
-      <header class="topbar"><div class="brand">DMED Admin</div>{nav}</header>
+      <header class="topbar"><div class="brand">Feedback Admin</div>{nav}</header>
       {body}
     </body>
     </html>
@@ -264,7 +287,7 @@ def _login_page(error: str | None = None, setup_required: bool = False) -> HTMLR
           <p class="muted">Укажите переменную <strong>WEB_ADMIN_TOKEN</strong> в .env и перезапустите сервис.</p>
         </main>
         """
-        return _page("Настройка веб-панели", body)
+        return _page("Feedback Admin", body)
     error_html = f'<p class="badge danger">{_esc(error)}</p>' if error else ""
     body = f"""
     <main class="login">
@@ -278,7 +301,7 @@ def _login_page(error: str | None = None, setup_required: bool = False) -> HTMLR
       </form>
     </main>
     """
-    return _page("Вход", body)
+    return _page("Feedback Admin", body)
 
 
 def _metric(label: str, value: object, note: str = "") -> str:
@@ -772,9 +795,9 @@ async def logout() -> Response:
 async def admin_dashboard(
     request: Request,
     tab: str = "analytics",
-    institution_id: int | None = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
+    institution_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     status: str | None = None,
     q: str | None = None,
     feedback_type: str | None = None,
@@ -786,21 +809,33 @@ async def admin_dashboard(
     if not _authenticated(request, settings):
         return RedirectResponse("/admin/login", status_code=303)
 
+    parsed_institution_id = _optional_int(institution_id, "Учреждение")
+    parsed_date_from = _optional_date(date_from, "С даты")
+    parsed_date_to = _optional_date(date_to, "По дату")
     active_tab = tab if tab in TAB_LABELS else "analytics"
     institutions = await _all_institutions(session)
     if active_tab == "institutions":
         content = await _render_institutions(institutions, settings)
     elif active_tab == "employees":
-        content = await _render_employees(session, institutions, institution_id)
+        content = await _render_employees(session, institutions, parsed_institution_id)
     elif active_tab == "reviews":
-        content = await _render_reviews(session, institutions, institution_id, date_from, date_to, status, q, feedback_type)
+        content = await _render_reviews(
+            session,
+            institutions,
+            parsed_institution_id,
+            parsed_date_from,
+            parsed_date_to,
+            status,
+            q,
+            feedback_type,
+        )
     elif active_tab == "admins":
         content = await _render_admins(session, settings)
     else:
-        content = await _render_analytics(session, institutions, institution_id, date_from, date_to)
+        content = await _render_analytics(session, institutions, parsed_institution_id, parsed_date_from, parsed_date_to)
 
     body = f'<main class="shell">{content}</main>'
-    return _page("DMED Admin", body, active_tab)
+    return _page("Feedback Admin", body, active_tab)
 
 
 @app.post("/admin/institutions")
@@ -985,28 +1020,44 @@ async def web_add_admin(request: Request, session: AsyncSession = Depends(get_se
 @app.get("/admin/export.xlsx")
 async def web_export_xlsx(
     request: Request,
-    institution_id: int | None = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
+    institution_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     settings = get_settings()
     _admin_required(request, settings)
-    path = await export_feedback_xlsx(session, institution_id=institution_id, date_from=date_from, date_to=date_to)
-    filename = f"dmed_feedback_{institution_id or 'all'}.xlsx"
+    parsed_institution_id = _optional_int(institution_id, "Учреждение")
+    parsed_date_from = _optional_date(date_from, "С даты")
+    parsed_date_to = _optional_date(date_to, "По дату")
+    path = await export_feedback_xlsx(
+        session,
+        institution_id=parsed_institution_id,
+        date_from=parsed_date_from,
+        date_to=parsed_date_to,
+    )
+    filename = f"feedback_{parsed_institution_id or 'all'}.xlsx"
     return FileResponse(path, filename=filename, background=BackgroundTask(lambda: Path(path).unlink(missing_ok=True)))
 
 
 @app.get("/admin/export.pdf")
 async def web_export_pdf(
     request: Request,
-    institution_id: int | None = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
+    institution_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     settings = get_settings()
     _admin_required(request, settings)
-    path = await export_feedback_pdf(session, institution_id=institution_id, date_from=date_from, date_to=date_to)
-    filename = f"dmed_feedback_{institution_id or 'all'}.pdf"
+    parsed_institution_id = _optional_int(institution_id, "Учреждение")
+    parsed_date_from = _optional_date(date_from, "С даты")
+    parsed_date_to = _optional_date(date_to, "По дату")
+    path = await export_feedback_pdf(
+        session,
+        institution_id=parsed_institution_id,
+        date_from=parsed_date_from,
+        date_to=parsed_date_to,
+    )
+    filename = f"feedback_{parsed_institution_id or 'all'}.pdf"
     return FileResponse(path, filename=filename, background=BackgroundTask(lambda: Path(path).unlink(missing_ok=True)))
